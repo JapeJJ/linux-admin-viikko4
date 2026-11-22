@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Week 4 - Replica</title>
+  <style>
+    body { max-width: 800px; margin: 40px auto; padding: 0 20px;
+           font-family: sans-serif; line-height: 1.6;
+           background: #000000; color: #ffffff; }
+    h1, h2 { color: #ff3333; }
+    a { color: #ff6666; }
+    .badge { display: inline-block; padding: 4px 12px; border: 2px solid #ffcc00;
+             color: #ffcc00; font-weight: bold; }
+    .counter { font-size: 2em; font-weight: bold; color: #ff3333; }
+  </style>
+</head>
+<body>
+  <h1>My Little Linux Box - Week 4 Server B</h1>
+  <p class="badge">Replica</p>
+  <p>This page reads the visitor counter from server B's local MariaDB replica.
+     Loading this page does not change the counter.</p>
+
+  <h2>Replicated visitor counter</h2>
+  <p>Server A's page has been loaded <span class="counter">{{ count }}</span> times.</p>
+  <p><a href="http://195.148.22.86/viikko2/">Server A: /viikko2/ (increments the counter)</a></p>
+</body>
+</html>
+

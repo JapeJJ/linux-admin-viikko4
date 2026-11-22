@@ -1,0 +1,14 @@
+[Unit]
+Description=Week 4 read-only replica page
+After=network.target mariadb.service
+Requires=mariadb.service
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/viikko4
+EnvironmentFile=/etc/viikko4.env
+ExecStart=/home/ubuntu/viikko4/venv/bin/gunicorn --bind 127.0.0.1:8001 app:app
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
