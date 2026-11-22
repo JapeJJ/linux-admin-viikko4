@@ -3,16 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Week 4 - Replica</title>
+  <title>Week 4 - Server B Replica</title>
   <style>
-    body { max-width: 800px; margin: 40px auto; padding: 0 20px;
+    body { max-width: 850px; margin: 40px auto; padding: 0 20px;
            font-family: sans-serif; line-height: 1.6;
            background: #000000; color: #ffffff; }
-    h1, h2 { color: #ff3333; }
+    h1, h2, h3 { color: #ff3333; }
     a { color: #ff6666; }
     .badge { display: inline-block; padding: 4px 12px; border: 2px solid #ffcc00;
              color: #ffcc00; font-weight: bold; }
     .counter { font-size: 2em; font-weight: bold; color: #ff3333; }
+    table { border-collapse: collapse; width: 100%; }
+    td, th { padding: 6px 8px; border-bottom: 1px solid #333333; text-align: left; vertical-align: top; }
+    code { background: #1a1a1a; }
+    img { max-width: 100%; }
   </style>
 </head>
 <body>
@@ -23,7 +27,107 @@
 
   <h2>Replicated visitor counter</h2>
   <p>Server A's page has been loaded <span class="counter">{{ count }}</span> times.</p>
-  <p><a href="http://195.148.22.86/viikko2/">Server A: /viikko2/ (increments the counter)</a></p>
+
+  <h2>Links</h2>
+  <ul>
+    <li>Server A (increments the counter): <a href="http://195.148.22.86/viikko2/">http://195.148.22.86/viikko2/</a></li>
+    <li>Server B (this read-only page): <a href="http://193.166.25.53/viikko4/">http://193.166.25.53/viikko4/</a></li>
+    <li>Source code: <a href="https://github.com/JapeJJ/linux-admin-viikko4">github.com/JapeJJ/linux-admin-viikko4</a></li>
+  </ul>
+
+  <h2>How server B was created</h2>
+  <p>Before cloning, I switched server A's database from MySQL to MariaDB so that the
+     replication follows the course material. Then I shut down server A with
+     <code>sudo poweroff</code> so the database files were consistent, created a snapshot of it in cPouta
+     and started A again. I launched server B from the snapshot (flavor standard.small),
+     gave it its own floating IP and used the same security group. On B I disabled the
+     week 2 app (<code>systemctl disable --now viikko2</code>) so it cannot write to the replica.</p>
+
+  <h2>Storage layout and backup locations</h2>
+  <p>Both servers have the same disk layout because B was cloned from A's snapshot
+     (even the filesystem UUIDs are identical). Each has one 80 GB virtual disk <code>/dev/vda</code>:</p>
+  <table>
+    <tr><th>Partition</th><th>Filesystem</th><th>Size</th><th>Mount point</th></tr>
+    <tr><td>/dev/vda1</td><td>ext4</td><td>77 GB (4 % used)</td><td>/ (everything below)</td></tr>
+    <tr><td>/dev/vda13</td><td>ext4</td><td>~1 GB</td><td>/boot</td></tr>
+    <tr><td>/dev/vda14</td><td>-</td><td>4 MB</td><td>- (BIOS boot)</td></tr>
+    <tr><td>/dev/vda15</td><td>vfat</td><td>106 MB</td><td>/boot/efi</td></tr>
+  </table>
+  <p>Important data locations (all on the root filesystem <code>/dev/vda1</code>):</p>
+  <table>
+    <tr><th>Location</th><th>Server</th><th>Contents</th></tr>
+    <tr><td>/var/www/html</td><td>A</td><td>Website files (the backup source)</td></tr>
+    <tr><td>/var/lib/mysql</td><td>A</td><td>MariaDB primary database</td></tr>
+    <tr><td>/var/lib/mysql</td><td>B</td><td>MariaDB replica database</td></tr>
+    <tr><td>/srv/backups/www/&lt;timestamp&gt;</td><td>B</td><td>Hourly backups of A's /var/www/html, outside the web root (owner wwwbackup, 700)</td></tr>
+    <tr><td>/var/log/wwwbackup.log</td><td>B</td><td>Backup log, OK/FAILED per run (owner wwwbackup, group adm, 640)</td></tr>
+  </table>
+  <p>Note: both servers are in the same cPouta project, so this is not an off-site copy
+     in the sense of the 3-2-1 rule.</p>
+
+  <h2>Users, ownership and permissions</h2>
+  <h3>Linux users</h3>
+  <table>
+    <tr><th>User</th><th>Server</th><th>Purpose and permissions</th></tr>
+    <tr><td>ubuntu</td><td>A, B</td><td>Admin user with sudo. Runs the week 2 app on A and the week 4 app on B.</td></tr>
+    <tr><td>wwwbackup</td><td>B</td><td>System user (no login shell) that runs the hourly backup.
+        Owns <code>/srv/backups/www</code> (700) and its SSH key in <code>/var/lib/wwwbackup/.ssh</code> (700).</td></tr>
+    <tr><td>wwwbackup</td><td>A</td><td>Normal user without sudo. Can only read <code>/var/www/html</code>.
+        B's public key is in its <code>authorized_keys</code> with the <code>restrict</code> option.</td></tr>
+    <tr><td>root</td><td>B</td><td>Owns the backup script <code>/usr/local/bin/backup-www.sh</code> (755), so wwwbackup can run it but not change it,
+        and <code>/etc/viikko4.env</code> (600) that holds the app's database password.</td></tr>
+  </table>
+  <h3>Database users</h3>
+  <table>
+    <tr><th>User</th><th>Privileges</th></tr>
+    <tr><td>laskuriJJ@localhost</td><td><code>SELECT, UPDATE</code> on <code>laskuri.visits</code> (week 2 app on A)</td></tr>
+    <tr><td>laskuri_ro@localhost</td><td><code>SELECT</code> only on <code>laskuri.visits</code> (this page on B). Created on A and replicated to B.</td></tr>
+    <tr><td>replicator@192.168.1.8</td><td><code>REPLICATION SLAVE</code> only, and only from B's internal IP</td></tr>
+  </table>
+  <p>B's MariaDB also has <code>read_only = ON</code>, so ordinary users cannot write to the replica.
+     Port 3306 on A is open in the security group only for <code>192.168.1.8/32</code>.</p>
+
+  <h2>Hourly backup schedule</h2>
+  <p>Server B pulls the backup from A (pull model), so even if A were compromised, it could not
+     delete B's backups. User wwwbackup's crontab on B runs
+     <code>backup-www.sh</code> every hour at minute 0 (<code>0 * * * *</code>) with <code>flock</code>
+     to prevent overlapping runs. The script uses rsync over SSH through the internal network to copy
+     A's <code>/var/www/html</code> into a new timestamped folder, e.g. <code>/srv/backups/www/2026-11-22_1800</code>.
+     Each run writes OK or FAILED to <code>/var/log/wwwbackup.log</code>. The newest 48 versions are kept.</p>
+
+  <h2>Continuous replication</h2>
+  <p>Server A (primary, <code>server_id = 1</code>) writes every database change to its binary log.
+     Server B (replica, <code>server_id = 2</code>) connects to A as user replicator through the internal network,
+     reads the binary log and applies the same changes to its own database. I made the initial copy with
+     <code>mariadb-dump --master-data=2</code>, imported it on B and started replication from the
+     recorded binlog position. The dump files were deleted afterwards.</p>
+  <p><strong>Why replication does not replace backups:</strong> replication copies every change within
+     seconds, including mistakes. If a table is deleted or a wrong UPDATE is run on A, the same thing
+     happens on B. Backups keep older versions, so data can be restored from before the mistake.</p>
+
+  <h2>Test results</h2>
+  <ul>
+    <li><strong>Both pages are public:</strong> A's /viikko2/ and B's /viikko4/ open from the internet.</li>
+    <li><strong>A updates B:</strong> B's counter was 28. I loaded A's page 4 times and B's counter became 32.</li>
+    <li><strong>B does not increment:</strong> the counter was 39, I loaded B's page 5 times and it stayed 39.</li>
+    <li><strong>Replication status:</strong> <code>SHOW REPLICA STATUS</code> showed Slave_IO_Running: Yes,
+        Slave_SQL_Running: Yes, no errors and Seconds_Behind_Master: 0.</li>
+    <li><strong>Scheduled backups:</strong> automatic runs at 17:00:01 and 18:00:03 (UTC) both logged OK.</li>
+    <li><strong>Restore test:</strong> I restored <code>index.html</code> from a backup to <code>/tmp/restore-test</code>.
+        The sha256 checksum matched A's original:
+        <code>8a250219ffa9bed2f75101ef6736db11cb4af4e233468f788a53f9b750208570</code></li>
+    <li><strong>Reboot of B:</strong> after <code>sudo reboot</code> nginx, mariadb, viikko4 and cron
+        were active, replication was Yes/Yes with 0 seconds behind, B's page showed new counter values from A,
+        and the next scheduled backup at 19:00:03 UTC was logged OK.</li>
+  </ul>
+
+  <h3>Before reboot: backups, counter and replication</h3>
+  <p><img src="static/before-reboot.png" alt="Backups at 17:00 and 18:00, counter staying at 39 and replication status before reboot"></p>
+
+  <h3>After reboot: services, replication and backup log</h3>
+  <p><img src="static/after-reboot.png" alt="Uptime, active services, replication status and the 19:00 backup after reboot"></p>
+
+  <h2>A problem I solved / something I learned</h2>
+  <p>All of the course materials were with mariaDB and i had used MySQL for week 2 so i had to switch systems.</p>
 </body>
 </html>
-
